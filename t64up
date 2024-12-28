@@ -6,7 +6,8 @@ alias yget="/usr/bin/wget -T 15 -U \"$USERAGENT\" --header \"Cache-Control: no-c
 trap ctrl_c SIGINT
 
 # Tomato64 Upgrade Script -- HommeOursPorc 2024/08
-ver="v0.16"
+# Last update == 2024-12-27
+ver="v0.17"
 
 help() {
 echo -e "Tomato64 Upgrade Script $ver
@@ -15,12 +16,10 @@ Usage: t64up [options] [firmware path or URL]
 
 Default is 'dirty' upgrade (NVRAM untouched) unless '-c' is specified.
 
-Single option:
-  --check          Print latest Tomato64 version number.
-
 Options:
+  --check          Print latest Tomato64 version number.
   --erase-nvram    Erase all data in NVRAM memory (thorough).
-                   Can be used with '-f'.
+                   Use alone or can be used with '-f'.
   -c               Clean upgrade (delete all settings).
   -d <path>        Overrides default download directory (/tmp/t64upwd/).
   -f               Use Fast-Reboot. Run locally the first time to 
@@ -31,7 +30,6 @@ Options:
   -y               Automatic 'YES' to prompts. USE WITH CAUTION!
 
 Infos:
- - Single option are meant to be run without any other arguments.
  - URL must begin with \"http(s)://\".
  - Supported format is tzst.
 
@@ -53,17 +51,17 @@ error() {
         1)  m="Unknown argument.";;
         2)  m="Too many arguments.";;
         3)  m="Firmware path or URL is missing.";;
-        #4)  m="No USB device found. Settings restoration is not possible.";;
-        #5)  m="nvram_backup is missing. Settings restoration is not possible.";;
+        #4)  m="";;
+        #5)  m="";;
         6)  m="Firmware format not supported.";;
         7)  m="Out of memory, not enough RAM.";;
         8)  m="Unable to download firmware.";;
         9)  m="Firmware doesn't exist or file is empty.";;
-        #10) m="ZIP archive is corrupted.";;
-        #11) m="Can't unzip archive, it's either corrupted or not enough RAM.";;
-        #12) m="ZIP archive countain zero or more than one firmware.";;
+        #10) m="";;
+        #11) m="";;
+        #12) m="";;
         #13) m="";;
-        #14) m="Backup is missing. Settings restoration is not possible.";;
+        #14) m="";;
         15) e=5; m="Operation cancelled.";;
         16) m="Can't fetch newest version number from GitHub.";;
         17) m="Destination directory doesn't exist.";;
@@ -76,6 +74,7 @@ error() {
         24) m="zst archive is corrupted."
     esac
     ilog $e "$m"
+    kill $(jobs -p) &>/dev/null
     rm -f ${WORKDIR}/*
     exit $1
 }
@@ -95,7 +94,7 @@ ilog() {
 }
 
 ctrl_c() {
-    kill $(jobs -p)
+    kill $(jobs -p) &>/dev/null
     echo; error 15
 }
 
@@ -202,7 +201,7 @@ download() {
 }
 
 prep_file() {
-    # Set FWPATH if no firmware download
+    # Set FWPATH if firmware is local (no download)
     [ "$FWPATH" == "" ] && {
         FWPATH="$FWURL"
         verify || error $?
@@ -219,8 +218,8 @@ prep_file() {
     [ $WARN -eq 1 ] && {
         [ $AUTOYES -eq 1 ] && error 22
         ilog 4 "Firmware doesn't match system boot firmware (BIOS or UEFI)."
-        echo "Firmware: $filename"
-        echo "System boot firmware: $BOOT"
+        echo "Your system boot firmware: $BOOT"
+        echo "Firmware to install: $filename"
         printf "\nContinue anyway (NOT RECOMMENDED)? $MSG"
         read ANSWER ; echo
         [ "$ANSWER" != "yes" ] && error 15
@@ -263,7 +262,6 @@ t64_upgrade() {
         wait_loop 10 "Rebooting in"
         FASTREBOOT=0
         rboot
-        exit
     fi
     rm -f ${WORKDIR}/*
     ilog 6 "Successfully flashed $filename"
@@ -279,11 +277,10 @@ erase_nvram() {
 rboot() {
     sync
     if [ $FASTREBOOT -eq 1 ]; then
-        /sbin/fast-reboot &
+        /sbin/fast-reboot && kill -9 $PPID
     else
-        /sbin/reboot &
+        /sbin/reboot && kill -9 $PPID
     fi
-    c=1;while true;do sleep 1;c=$((c+1));echo -ne "$c\033[0K\r";done
     exit
 }
 
@@ -327,16 +324,16 @@ CURVER="$(echo "$OSVER" | awk '{print $1}')" # eg 2023.3
         esac
     done
 }
+[ $ERASE -eq 0 ] && {
 for a in "$@"; do
-    [ $ERASE -eq 1 ] && break
-    [ "$(echo "$a" | cut -c1)" == "-" ] && {
-        a="$(echo "$a" | tr -d "-")"
+    printf "%s" "$a" | grep -q "^-" && {
+        a="$(printf "%s" "$a" | tr -d "-")"
         [ "$a" == "" ] && error 1
-        OPTIONS="$(echo "$a" | grep -o . )"
+        OPTIONS="$(printf "%s" "$a" | grep -o . )"
         for o in $OPTIONS; do
             case $o in
                 c) [ "$MODE"     == "" ] && MODE="clean" || error 2 ;;
-                d) [ "$DLDIR"    == "" ] && SETDIR=1     || error 2 ;;
+                d) [ "$DLDIR"    == "" ] && { DLDIR=1 ; SETDIR=1 ; }         || error 2 ;;
                 f) [ $FASTREBOOT -eq 0 ] && FASTREBOOT=1 || error 2 ;;
                 n) [ "$NOCHECK"  == "" ] && NOCHECK="--no-check-certificate" || error 2 ;;
                 o) [ $ONLY       -eq 0 ] && ONLY=1       || error 2 ;;
@@ -347,14 +344,15 @@ for a in "$@"; do
     } || {
         [ $SETDIR -eq 1 ] && { [ -d "$a" ] && { DLDIR="$a" ; SETDIR=0 ; continue ; } || error 17 ; }
         [ "$FWURL" == "" ] && {
-            [ $(echo "$a" | grep -qi "^http"; echo $?) -eq 0 ] && REMOTE=1
-            [ $(echo "$a" | grep -Eqi "^http(|s)://(|www\.)(tomato64.org/|github\.com/tomato64/tomato64/releases/download/)"; echo $?) -eq 0 ] && OFFICIAL=1
+            printf "%s" "$a" | grep -qi "^http" && REMOTE=1
+            printf "%s" "$a" | grep -Eqi "^http(|s)://(|www\.)(tomato64.org/|github\.com/tomato64/tomato64/releases/download/)" && OFFICIAL=1
             FWURL="$a"
         } || {
             error 2
         }
     }
 done
+}
 [ $ONLY -eq 1 -a $FASTREBOOT -eq 1 ] && error 2
 [ $ERASE -eq 0 -a "$FWURL" == "" ] && error 3
 [ "$FWURL" != "" ] && {
@@ -383,9 +381,13 @@ done
     prep_file
     printf "\n\n                POINT OF NO RETURN\n\n"
     echo -e "Make sure you are using the right firmware before proceeding!\n"
-    echo "Firmware: $filename"
-    echo "System boot firmware: $BOOT"
-    echo -e "\nProceed $MODE upgrade with firmware '$filename' ?"
+    printf "Current:\n"
+    printf "   System boot firmware: $BOOT\n"
+    printf "   Version: $OSVER\n\n"
+    printf "Upgrade with:\n"
+    printf "   Firmware: $filename\n\n"
+    [ "$MODE" == "clean" ] && printf "Warning: Clean upgrade mode selected.\nALL settings will be ERASED!\n\n"
+    echo "Proceed $MODE upgrade?"
     [ $AUTOYES -eq 1 ] && {
         printf "\n\nTo cancel press CTRL+C\n\n"
         wait_loop 7 "Upgrade starting in"
