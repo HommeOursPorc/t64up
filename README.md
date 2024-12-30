@@ -19,8 +19,8 @@ Options:
   -y               Automatic 'YES' to prompts. USE WITH CAUTION!
 
 Infos:
- - URL must begin with \"http(s)://\".
- - Supported format is tzst.
+ - URL must begin with 'http(s)://'.
+ - Supported format is 'tzst'.
 
 WARNING:
    This script comes with no guarantee.
