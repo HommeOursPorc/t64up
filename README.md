@@ -1,3 +1,6 @@
+> [!WARNING]
+> **For x86_64 only**
+
 ```
 Tomato64 Upgrade Script
 
